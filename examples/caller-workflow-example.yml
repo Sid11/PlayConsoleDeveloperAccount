@@ -1,0 +1,55 @@
+# Copy this into an app repo as .github/workflows/deploy-playstore.yml and adjust
+# `package_name` / `module`. See README.md for the secrets this requires.
+name: Deploy to Play Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        required: true
+        default: upload
+        type: choice
+        options:
+          - upload
+          - set-rollout
+          - promote
+          - halt
+          - update-listing
+          - upload-images
+          - status
+      track:
+        description: "Track (used by upload/set-rollout/halt/status)"
+        required: false
+        default: internal
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+      rollout:
+        description: "Staged rollout fraction 0.0-1.0 (used by upload/set-rollout)"
+        required: false
+        default: "1.0"
+      from_track:
+        description: "Source track (used by promote)"
+        required: false
+        default: internal
+      to_track:
+        description: "Destination track (used by promote)"
+        required: false
+        default: production
+
+jobs:
+  deploy:
+    uses: Sid11/PlayConsoleDeveloperAccount/.github/workflows/play-deploy.yml@main
+    with:
+      package_name: com.example.app # <-- change this
+      module: app
+      action: ${{ inputs.action }}
+      track: ${{ inputs.track }}
+      rollout: ${{ inputs.rollout }}
+      from_track: ${{ inputs.from_track }}
+      to_track: ${{ inputs.to_track }}
+    secrets: inherit
