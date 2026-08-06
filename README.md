@@ -71,10 +71,14 @@ GitHub personal accounts don't support org-wide Action secrets, so add these to
 | `ANDROID_KEYSTORE_PASSWORD` | The keystore/key password |
 | `ANDROID_KEY_ALIAS` | The key alias (`release` in the example above) |
 | `ANDROID_KEY_PASSWORD` | Same as the keystore password |
+| `GOOGLE_SERVICES_JSON` | Optional — full contents of the app's Firebase `google-services.json`. Only needed if the app uses Firebase; omitted entirely for apps that don't, same as local dev. |
 
 `ANDROID_*` secrets are only needed for `action: upload` (they sign the build);
 `set-rollout` / `promote` / `halt` / `update-listing` / `upload-images` / `status`
-only need `PLAY_SERVICE_ACCOUNT_JSON`.
+only need `PLAY_SERVICE_ACCOUNT_JSON`. `GOOGLE_SERVICES_JSON` is also only used for
+`action: upload`, and only written into the module directory during the build — a
+missing secret simply means the build proceeds without Firebase configured, matching
+the app's own offline-safe fallback behavior rather than failing the pipeline.
 
 ### 4. Add the caller workflow to the app repo
 

@@ -92,6 +92,9 @@ on:
         required: false
       ANDROID_KEY_PASSWORD:
         required: false
+      GOOGLE_SERVICES_JSON:
+        description: "Full contents of the app's Firebase google-services.json (optional — only apps using Firebase need it; omitted apps build without it same as local dev)"
+        required: false
 
 jobs:
   deploy:
@@ -134,6 +137,17 @@ jobs:
           keyAlias=$ANDROID_KEY_ALIAS
           keyPassword=$ANDROID_KEY_PASSWORD
           EOF
+
+      - name: Write Firebase google-services.json
+        if: inputs.action == 'upload'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          MODULE: ${{ inputs.module }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
+            echo "$GOOGLE_SERVICES_JSON" > "$MODULE/google-services.json"
+          fi
 
       - name: Build signed release artifact
         if: inputs.action == 'upload'
@@ -244,4 +258,6 @@ jobs:
 
       - name: Clean up secrets
         if: always()
-        run: rm -f /tmp/play-service-account.json keystore.properties keystore/release.jks
+        env:
+          MODULE: ${{ inputs.module }}
+        run: rm -f /tmp/play-service-account.json keystore.properties keystore/release.jks "$MODULE/google-services.json"
