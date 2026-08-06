@@ -1,0 +1,247 @@
+name: Play Console Deploy (reusable)
+
+# Central Play Console release pipeline, shared by every app repo. Called via
+# `uses: Sid11/PlayConsoleDeveloperAccount/.github/workflows/play-deploy.yml@main`
+# from a thin per-app caller workflow. See README.md for full setup instructions.
+#
+# `workflow_call` jobs run in the context of the CALLING repository, so the first
+# checkout below pulls the app's own code with no extra configuration.
+
+on:
+  workflow_call:
+    inputs:
+      package_name:
+        description: "Android application ID, e.g. com.example.app"
+        required: true
+        type: string
+      module:
+        description: "Gradle module directory containing the app, relative to repo root"
+        required: false
+        type: string
+        default: app
+      action:
+        description: "upload | set-rollout | promote | halt | update-listing | upload-images | status"
+        required: false
+        type: string
+        default: upload
+      track:
+        description: "Play Console track, e.g. internal / alpha / beta / production"
+        required: false
+        type: string
+        default: internal
+      from_track:
+        required: false
+        type: string
+        default: ""
+      to_track:
+        required: false
+        type: string
+        default: ""
+      rollout:
+        description: "Staged rollout fraction 0.0-1.0. 1.0 = full/completed release."
+        required: false
+        type: string
+        default: "1.0"
+      artifact_type:
+        description: "aab | apk"
+        required: false
+        type: string
+        default: aab
+      release_notes_path:
+        description: "Directory of <language-code>.txt release notes, relative to repo root"
+        required: false
+        type: string
+        default: ""
+      language:
+        description: "Store listing language code, used by update-listing/upload-images"
+        required: false
+        type: string
+        default: en-US
+      listing_title:
+        required: false
+        type: string
+        default: ""
+      listing_short_description:
+        required: false
+        type: string
+        default: ""
+      listing_full_description:
+        required: false
+        type: string
+        default: ""
+      image_type:
+        description: "icon | featureGraphic | phoneScreenshots | sevenInchScreenshots | tenInchScreenshots | tvBanner | tvScreenshot | wearScreenshot | promoGraphic"
+        required: false
+        type: string
+        default: ""
+      image_dir:
+        description: "Directory of images to upload, relative to repo root"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON:
+        description: "Full JSON key content of the Play Console service account"
+        required: true
+      ANDROID_KEYSTORE_BASE64:
+        description: "base64 -w0 of the app's release .jks keystore (required for action=upload)"
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app repository
+        uses: actions/checkout@v4
+
+      - name: Checkout PlayConsoleDeveloperAccount pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: Sid11/PlayConsoleDeveloperAccount
+          path: .play-pipeline
+
+      - name: Set up JDK 17
+        if: inputs.action == 'upload'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Decode release keystore
+        if: inputs.action == 'upload'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::error::action=upload requires ANDROID_KEYSTORE_BASE64 (and the matching password/alias secrets) to be set on this repo."
+            exit 1
+          fi
+          mkdir -p keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore/release.jks
+          cat > keystore.properties <<EOF
+          storeFile=keystore/release.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build signed release artifact
+        if: inputs.action == 'upload'
+        env:
+          MODULE: ${{ inputs.module }}
+          ARTIFACT_TYPE: ${{ inputs.artifact_type }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          if [ "$ARTIFACT_TYPE" = "aab" ]; then
+            ./gradlew bundleRelease
+          else
+            ./gradlew assembleRelease
+          fi
+
+      - name: Locate built artifact
+        if: inputs.action == 'upload'
+        id: artifact
+        env:
+          MODULE: ${{ inputs.module }}
+          ARTIFACT_TYPE: ${{ inputs.artifact_type }}
+        run: |
+          set -euo pipefail
+          if [ "$ARTIFACT_TYPE" = "aab" ]; then
+            found=$(find "$MODULE/build/outputs/bundle/release" -name '*.aab' | head -n1)
+          else
+            found=$(find "$MODULE/build/outputs/apk/release" -name '*.apk' | head -n1)
+          fi
+          if [ -z "$found" ]; then
+            echo "::error::No $ARTIFACT_TYPE found under $MODULE/build/outputs"
+            exit 1
+          fi
+          echo "path=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pipeline dependencies
+        run: pip install -r .play-pipeline/requirements.txt
+
+      - name: Write service account credentials
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is not set on this repo."
+            exit 1
+          fi
+          echo "$SERVICE_ACCOUNT_JSON" > /tmp/play-service-account.json
+
+      - name: Run play_publish.py
+        env:
+          ACTION: ${{ inputs.action }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          TRACK: ${{ inputs.track }}
+          FROM_TRACK: ${{ inputs.from_track }}
+          TO_TRACK: ${{ inputs.to_track }}
+          ROLLOUT: ${{ inputs.rollout }}
+          ARTIFACT_TYPE: ${{ inputs.artifact_type }}
+          RELEASE_NOTES_PATH: ${{ inputs.release_notes_path }}
+          LANGUAGE: ${{ inputs.language }}
+          LISTING_TITLE: ${{ inputs.listing_title }}
+          LISTING_SHORT_DESCRIPTION: ${{ inputs.listing_short_description }}
+          LISTING_FULL_DESCRIPTION: ${{ inputs.listing_full_description }}
+          IMAGE_TYPE: ${{ inputs.image_type }}
+          IMAGE_DIR: ${{ inputs.image_dir }}
+          ARTIFACT_PATH: ${{ steps.artifact.outputs.path }}
+        run: |
+          set -euo pipefail
+          CMD=(python .play-pipeline/scripts/play_publish.py --credentials /tmp/play-service-account.json "$ACTION" --package "$PACKAGE_NAME")
+
+          case "$ACTION" in
+            upload)
+              CMD+=(--track "$TRACK" --file "$ARTIFACT_PATH" --artifact-type "$ARTIFACT_TYPE" --rollout "$ROLLOUT")
+              [ -n "$RELEASE_NOTES_PATH" ] && CMD+=(--release-notes "$RELEASE_NOTES_PATH")
+              ;;
+            set-rollout)
+              CMD+=(--track "$TRACK" --rollout "$ROLLOUT")
+              ;;
+            promote)
+              CMD+=(--from-track "$FROM_TRACK" --to-track "$TO_TRACK")
+              ;;
+            halt)
+              CMD+=(--track "$TRACK")
+              ;;
+            update-listing)
+              CMD+=(--language "$LANGUAGE")
+              [ -n "$LISTING_TITLE" ] && CMD+=(--title "$LISTING_TITLE")
+              [ -n "$LISTING_SHORT_DESCRIPTION" ] && CMD+=(--short-description "$LISTING_SHORT_DESCRIPTION")
+              [ -n "$LISTING_FULL_DESCRIPTION" ] && CMD+=(--full-description "$LISTING_FULL_DESCRIPTION")
+              ;;
+            upload-images)
+              CMD+=(--language "$LANGUAGE" --image-type "$IMAGE_TYPE" --dir "$IMAGE_DIR")
+              ;;
+            status)
+              [ -n "$TRACK" ] && CMD+=(--track "$TRACK")
+              ;;
+            *)
+              echo "::error::Unknown action: $ACTION"
+              exit 1
+              ;;
+          esac
+
+          "${CMD[@]}"
+
+      - name: Clean up secrets
+        if: always()
+        run: rm -f /tmp/play-service-account.json keystore.properties keystore/release.jks
