@@ -162,33 +162,61 @@ def cmd_set_rollout(service, args: argparse.Namespace) -> None:
     print(f"Set rollout on track={args.track} to {args.rollout} for {package_name}")
 
 
-def cmd_promote(service, args: argparse.Namespace) -> None:
-    package_name = args.package
+def _promote_once(service, package_name: str, from_track: str, to_track: str, status: str):
+    """Runs one insert/update/commit cycle for a promote attempt. Each attempt needs
+    its own edit: a failed commit() leaves the prior edit unusable for a retry."""
     edit = service.edits().insert(body={}, packageName=package_name).execute()
     edit_id = edit["id"]
 
     source_track = (
         service.edits()
         .tracks()
-        .get(editId=edit_id, packageName=package_name, track=args.from_track)
+        .get(editId=edit_id, packageName=package_name, track=from_track)
         .execute()
     )
     releases = source_track.get("releases", [])
     if not releases:
-        _fail(f"no releases found on source track={args.from_track} for {package_name}")
+        _fail(f"no releases found on source track={from_track} for {package_name}")
     version_codes = releases[0]["versionCodes"]
 
     service.edits().tracks().update(
         editId=edit_id,
-        track=args.to_track,
+        track=to_track,
         packageName=package_name,
-        body={"releases": [{"versionCodes": version_codes, "status": "completed"}]},
+        body={"releases": [{"versionCodes": version_codes, "status": status}]},
     ).execute()
     service.edits().commit(editId=edit_id, packageName=package_name).execute()
-    print(
-        f"Promoted versionCodes={version_codes} from track={args.from_track} "
-        f"to track={args.to_track} for {package_name}"
-    )
+    return version_codes
+
+
+def cmd_promote(service, args: argparse.Namespace) -> None:
+    package_name = args.package
+    try:
+        version_codes = _promote_once(
+            service, package_name, args.from_track, args.to_track, "completed"
+        )
+        print(
+            f"Promoted versionCodes={version_codes} from track={args.from_track} "
+            f"to track={args.to_track} for {package_name}"
+        )
+    except HttpError as e:
+        # A brand-new app stays in Play Console "draft" status until its first
+        # production release has been through Google's review — it rejects a release
+        # created with status=completed (instantly live) but accepts status=draft
+        # (submitted for review). Retry that way instead of failing outright; this
+        # only ever triggers for a genuinely draft app, since "completed" always
+        # succeeds once the app has published anything before.
+        if "draft app" not in str(e):
+            raise
+        version_codes = _promote_once(
+            service, package_name, args.from_track, args.to_track, "draft"
+        )
+        print(
+            f"App is still in Play Console draft status (first production release) — "
+            f"submitted versionCodes={version_codes} from track={args.from_track} to "
+            f"track={args.to_track} for {package_name} as a draft release for Google's "
+            f"review. It will go live once Google approves it, not immediately."
+        )
 
 
 def cmd_halt(service, args: argparse.Namespace) -> None:
