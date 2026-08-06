@@ -22,6 +22,7 @@ import sys
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 
@@ -76,18 +77,22 @@ def cmd_upload(service, args: argparse.Namespace) -> None:
     edit_id = edit["id"]
 
     if args.artifact_type == "aab":
+        # Explicit mimetype: Python's mimetypes module doesn't know the .aab
+        # extension, so passing the bare path as media_body raises UnknownFileType.
+        media = MediaFileUpload(args.file, mimetype="application/octet-stream")
         result = (
             service.edits()
             .bundles()
-            .upload(editId=edit_id, packageName=package_name, media_body=args.file)
+            .upload(editId=edit_id, packageName=package_name, media_body=media)
             .execute()
         )
         version_code = result["versionCode"]
     else:
+        media = MediaFileUpload(args.file, mimetype="application/vnd.android.package-archive")
         result = (
             service.edits()
             .apks()
-            .upload(editId=edit_id, packageName=package_name, media_body=args.file)
+            .upload(editId=edit_id, packageName=package_name, media_body=media)
             .execute()
         )
         version_code = result["versionCode"]
@@ -246,12 +251,14 @@ def cmd_upload_images(service, args: argparse.Namespace) -> None:
     edit_id = edit["id"]
 
     for path in files:
+        ext = os.path.splitext(path)[1].lower()
+        mimetype = "image/png" if ext == ".png" else "image/jpeg"
         service.edits().images().upload(
             editId=edit_id,
             packageName=package_name,
             language=args.language,
             imageType=args.image_type,
-            media_body=path,
+            media_body=MediaFileUpload(path, mimetype=mimetype),
         ).execute()
 
     service.edits().commit(editId=edit_id, packageName=package_name).execute()
