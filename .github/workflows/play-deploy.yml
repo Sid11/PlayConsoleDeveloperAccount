@@ -20,7 +20,7 @@ on:
         type: string
         default: app
       action:
-        description: "upload | set-rollout | promote | halt | update-listing | upload-images | status"
+        description: "upload | set-rollout | promote | halt | update-listing | upload-images | status | list-listings"
         required: false
         type: string
         default: upload
@@ -247,6 +247,8 @@ jobs:
               ;;
             status)
               [ -n "$TRACK" ] && CMD+=(--track "$TRACK")
+              ;;
+            list-listings)
               ;;
             *)
               echo "::error::Unknown action: $ACTION"

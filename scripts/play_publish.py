@@ -331,6 +331,19 @@ def cmd_status(service, args: argparse.Namespace) -> None:
             )
 
 
+def cmd_list_listings(service, args: argparse.Namespace) -> None:
+    package_name = args.package
+    # Read-only, mirrors cmd_status: insert an edit to read through it, never commit.
+    edit = service.edits().insert(body={}, packageName=package_name).execute()
+    edit_id = edit["id"]
+
+    listings = service.edits().listings().list(
+        editId=edit_id, packageName=package_name
+    ).execute()
+    for listing in listings.get("listings", []):
+        print(f"[{listing.get('language')}] title={listing.get('title')!r}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Google Play Console release pipeline CLI (Android Publisher API v3)."
@@ -407,6 +420,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p_status)
     p_status.add_argument("--track", default=None, help="Limit to one track; default all tracks.")
     p_status.set_defaults(func=cmd_status)
+
+    p_listlistings = subparsers.add_parser(
+        "list-listings", help="Print each store listing's language + title. Read-only, never commits."
+    )
+    add_common(p_listlistings)
+    p_listlistings.set_defaults(func=cmd_list_listings)
 
     return parser
 
