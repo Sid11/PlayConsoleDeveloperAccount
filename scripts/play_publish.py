@@ -278,6 +278,17 @@ def cmd_upload_images(service, args: argparse.Namespace) -> None:
     edit = service.edits().insert(body={}, packageName=package_name).execute()
     edit_id = edit["id"]
 
+    # Replace, don't accumulate: re-running this command with a refreshed set of
+    # images should make the store listing match that set exactly, not keep
+    # appending until the language/imageType pair hits Play Console's cap (8 for
+    # phoneScreenshots) and every subsequent upload starts failing with a 403.
+    service.edits().images().deleteall(
+        editId=edit_id,
+        packageName=package_name,
+        language=args.language,
+        imageType=args.image_type,
+    ).execute()
+
     for path in files:
         ext = os.path.splitext(path)[1].lower()
         mimetype = "image/png" if ext == ".png" else "image/jpeg"
@@ -291,8 +302,8 @@ def cmd_upload_images(service, args: argparse.Namespace) -> None:
 
     service.edits().commit(editId=edit_id, packageName=package_name).execute()
     print(
-        f"Uploaded {len(files)} {args.image_type} image(s) ({args.language}) "
-        f"for {package_name}: {[os.path.basename(f) for f in files]}"
+        f"Replaced {args.image_type} images ({args.language}) for {package_name} "
+        f"with {len(files)} file(s): {[os.path.basename(f) for f in files]}"
     )
 
 
